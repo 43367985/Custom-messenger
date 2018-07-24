@@ -1,46 +1,134 @@
 /*
- * This is the source code of Telegram for Android v. 1.3.2.
+ * This is the source code of Telegram for Android v. 3.x.x.
  * It is licensed under GNU GPL v. 2 or later.
  * You should have received a copy of the license in this archive (see LICENSE).
  *
- * Copyright Nikolai Kudashov, 2013.
+ * Copyright Nikolai Kudashov, 2013-2017.
  */
 
 package org.telegram.ui;
 
+import android.animation.ObjectAnimator;
+import android.animation.StateListAnimator;
 import android.app.Activity;
+import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.database.DataSetObserver;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.RectF;
+import android.graphics.Shader;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Parcelable;
 import android.support.v4.view.PagerAdapter;
 import android.support.v4.view.ViewPager;
-import android.text.Html;
+import android.util.Log;
+import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
+import android.view.animation.DecelerateInterpolator;
+import android.widget.FrameLayout;
+import android.widget.Button;
 import android.widget.ImageView;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
-import org.telegram.android.AndroidUtilities;
-import org.telegram.android.LocaleController;
-import org.telegram.R;
-import org.telegram.messenger.Utilities;
+import com.appsgeyser.sdk.AppsgeyserSDK;
 
-public class IntroActivity extends Activity {
+import org.telegram.messenger.AndroidUtilities;
+import org.telegram.messenger.ApplicationLoader;
+import org.telegram.messenger.BuildVars;
+import org.telegram.messenger.LocaleController;
+import org.telegram.messenger.NotificationCenter;
+import org.telegram.messenger.R;
+import org.telegram.messenger.config.IntroPage;
+import org.telegram.tgnet.ConnectionsManager;
+import org.telegram.tgnet.RequestDelegate;
+import org.telegram.tgnet.TLObject;
+import org.telegram.tgnet.TLRPC;
+import org.telegram.ui.Components.LayoutHelper;
+
+import java.util.Collections;
+import java.util.List;
+
+public class IntroActivity extends Activity implements NotificationCenter.NotificationCenterDelegate {
+
+    private class BottomPagesView extends View {
+
+        private Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private float progress;
+        private int scrollPosition;
+        private int currentPage;
+        private DecelerateInterpolator decelerateInterpolator = new DecelerateInterpolator();
+        private RectF rect = new RectF();
+        private float animatedProgress;
+
+        public BottomPagesView(Context context) {
+            super(context);
+        }
+
+        public void setPageOffset(int position, float offset) {
+            progress = offset;
+            scrollPosition = position;
+            invalidate();
+        }
+
+        public void setCurrentPage(int page) {
+            currentPage = page;
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            float d = AndroidUtilities.dp(5);
+            paint.setColor(0xffbbbbbb);
+            int x;
+            currentPage = viewPager.getCurrentItem();
+            for (int a = 0; a < icons.length; a++) {
+                if (a == currentPage) {
+                    continue;
+                }
+                x = a * AndroidUtilities.dp(11);
+                rect.set(x, 0, x + AndroidUtilities.dp(5), AndroidUtilities.dp(5));
+                canvas.drawRoundRect(rect, AndroidUtilities.dp(2.5f), AndroidUtilities.dp(2.5f), paint);
+            }
+            paint.setColor(ApplicationLoader.getConfig().getDefaultTheme().getActionColor());
+            x = currentPage * AndroidUtilities.dp(11);
+            if (progress != 0) {
+                if (scrollPosition >= currentPage) {
+                    rect.set(x, 0, x + AndroidUtilities.dp(5) + AndroidUtilities.dp(11) * progress, AndroidUtilities.dp(5));
+                } else {
+                    rect.set(x - AndroidUtilities.dp(11) * (1.0f - progress), 0, x + AndroidUtilities.dp(5), AndroidUtilities.dp(5));
+                }
+            } else {
+                rect.set(x, 0, x + AndroidUtilities.dp(5), AndroidUtilities.dp(5));
+            }
+            canvas.drawRoundRect(rect, AndroidUtilities.dp(2.5f), AndroidUtilities.dp(2.5f), paint);
+        }
+    }
+
     private ViewPager viewPager;
     private ImageView topImage1;
     private ImageView topImage2;
-    private ViewGroup bottomPages;
+    private BottomPagesView bottomPages;
+    private TextView textView;
     private int lastPage = 0;
     private boolean justCreated = false;
     private boolean startPressed = false;
-    private int[] icons;
-    private int[] titles;
-    private int[] messages;
+    private Drawable[] icons;
+    private String[] titles;
+    private CharSequence[] messages;
+
+    private LocaleController.LocaleInfo localeInfo;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -48,84 +136,121 @@ public class IntroActivity extends Activity {
         super.onCreate(savedInstanceState);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
 
-        if (AndroidUtilities.isTablet()) {
-            setContentView(R.layout.intro_layout_tablet);
+        if (LocaleController.isRTL) {
+            if (ApplicationLoader.getConfig().isUseDefaultWelcome()) {
+                icons = new Drawable[]{
+                        getResources().getDrawable(R.drawable.intro7),
+                        getResources().getDrawable(R.drawable.intro6),
+                        getResources().getDrawable(R.drawable.intro5),
+                        getResources().getDrawable(R.drawable.intro4),
+                        getResources().getDrawable(R.drawable.intro3),
+                        getResources().getDrawable(R.drawable.intro2),
+                        ApplicationLoader.getConfig().getIcon()
+                };
+                titles = new String[]{
+                        getString(R.string.Page7Title),
+                        getString(R.string.Page6Title),
+                        getString(R.string.Page5Title),
+                        getString(R.string.Page4Title),
+                        getString(R.string.Page3Title),
+                        getString(R.string.Page2Title),
+                        getString(R.string.Page1Title, ApplicationLoader.getConfig().getAppName()),
+                };
+                messages = new CharSequence[]{
+                        AndroidUtilities.replaceTags(LocaleController.formatString("Page7Message", R.string.Page7Message, ApplicationLoader.getConfig().getAppName())),
+                        AndroidUtilities.replaceTags(LocaleController.formatString("Page6Message", R.string.Page6Message, ApplicationLoader.getConfig().getAppName())),
+                        AndroidUtilities.replaceTags(LocaleController.formatString("Page5Message", R.string.Page5Message, ApplicationLoader.getConfig().getAppName())),
+                        AndroidUtilities.replaceTags(LocaleController.formatString("Page4Message", R.string.Page4Message, ApplicationLoader.getConfig().getAppName())),
+                        AndroidUtilities.replaceTags(LocaleController.formatString("Page3Message", R.string.Page3Message, ApplicationLoader.getConfig().getAppName())),
+                        AndroidUtilities.replaceTags(LocaleController.formatString("Page2Message", R.string.Page2Message, ApplicationLoader.getConfig().getAppName())),
+                        AndroidUtilities.replaceTags(LocaleController.getString("Page1Message", R.string.Page1Message))
+                };
+            } else {
+                List<IntroPage> introPages = ApplicationLoader.getConfig().getIntroPages(this);
+                Collections.reverse(introPages);
+
+                icons = new Drawable[introPages.size()];
+                titles = new String[introPages.size()];
+                messages = new CharSequence[introPages.size()];
+
+                for (int i = 0; i < introPages.size(); i++) {
+                    IntroPage page = introPages.get(i);
+                    icons[i] = page.getImage();
+                    titles[i] = page.getTitle();
+                    messages[i] = page.getMessage();
+                }
+            }
         } else {
-            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
-            setContentView(R.layout.intro_layout);
+            if (ApplicationLoader.getConfig().isUseDefaultWelcome()) {
+                icons = new Drawable[]{
+                        ApplicationLoader.getConfig().getIcon(),
+                        getResources().getDrawable(R.drawable.intro2),
+                        getResources().getDrawable(R.drawable.intro3),
+                        getResources().getDrawable(R.drawable.intro4),
+                        getResources().getDrawable(R.drawable.intro5),
+                        getResources().getDrawable(R.drawable.intro6),
+                        getResources().getDrawable(R.drawable.intro7),
+                };
+                titles = new String[]{
+                        getString(R.string.Page1Title, ApplicationLoader.getConfig().getAppName()),
+                        getString(R.string.Page2Title),
+                        getString(R.string.Page3Title),
+                        getString(R.string.Page4Title),
+                        getString(R.string.Page5Title),
+                        getString(R.string.Page6Title),
+                        getString(R.string.Page7Title),
+                };
+                messages = new CharSequence[]{
+                        AndroidUtilities.replaceTags(LocaleController.getString("Page1Message", R.string.Page1Message)),
+                        AndroidUtilities.replaceTags(LocaleController.formatString("Page2Message", R.string.Page2Message, ApplicationLoader.getConfig().getAppName())),
+                        AndroidUtilities.replaceTags(LocaleController.formatString("Page3Message", R.string.Page3Message, ApplicationLoader.getConfig().getAppName())),
+                        AndroidUtilities.replaceTags(LocaleController.formatString("Page4Message", R.string.Page4Message, ApplicationLoader.getConfig().getAppName())),
+                        AndroidUtilities.replaceTags(LocaleController.formatString("Page5Message", R.string.Page5Message, ApplicationLoader.getConfig().getAppName())),
+                        AndroidUtilities.replaceTags(LocaleController.formatString("Page6Message", R.string.Page6Message, ApplicationLoader.getConfig().getAppName())),
+                        AndroidUtilities.replaceTags(LocaleController.formatString("Page7Message", R.string.Page7Message, ApplicationLoader.getConfig().getAppName())),
+                };
+            }else {
+                List<IntroPage> introPages = ApplicationLoader.getConfig().getIntroPages(this);
+                icons = new Drawable[introPages.size()];
+                titles = new String[introPages.size()];
+                messages = new CharSequence[introPages.size()];
+
+                for (int i = 0; i < introPages.size(); i++) {
+                    IntroPage page = introPages.get(i);
+                    icons[i] = page.getImage();
+                    titles[i] = page.getTitle();
+                    messages[i] = page.getMessage();
+                }
+            }
         }
 
-        if (LocaleController.isRTL) {
-            icons = new int[] {
-                    R.drawable.intro7,
-                    R.drawable.intro6,
-                    R.drawable.intro5,
-                    R.drawable.intro4,
-                    R.drawable.intro3,
-                    R.drawable.intro2,
-                    R.drawable.intro1
-            };
-            titles = new int[] {
-                    R.string.Page7Title,
-                    R.string.Page6Title,
-                    R.string.Page5Title,
-                    R.string.Page4Title,
-                    R.string.Page3Title,
-                    R.string.Page2Title,
-                    R.string.Page1Title
-            };
-            messages = new int[] {
-                    R.string.Page7Message,
-                    R.string.Page6Message,
-                    R.string.Page5Message,
-                    R.string.Page4Message,
-                    R.string.Page3Message,
-                    R.string.Page2Message,
-                    R.string.Page1Message
-            };
-        } else {
-            icons = new int[] {
-                    R.drawable.intro1,
-                    R.drawable.intro2,
-                    R.drawable.intro3,
-                    R.drawable.intro4,
-                    R.drawable.intro5,
-                    R.drawable.intro6,
-                    R.drawable.intro7
-            };
-            titles = new int[] {
-                    R.string.Page1Title,
-                    R.string.Page2Title,
-                    R.string.Page3Title,
-                    R.string.Page4Title,
-                    R.string.Page5Title,
-                    R.string.Page6Title,
-                    R.string.Page7Title
-            };
-            messages = new int[] {
-                    R.string.Page1Message,
-                    R.string.Page2Message,
-                    R.string.Page3Message,
-                    R.string.Page4Message,
-                    R.string.Page5Message,
-                    R.string.Page6Message,
-                    R.string.Page7Message
-            };
-        }
-        viewPager = (ViewPager)findViewById(R.id.intro_view_pager);
-        TextView startMessagingButton = (TextView) findViewById(R.id.start_messaging_button);
-        startMessagingButton.setText(LocaleController.getString("StartMessaging", R.string.StartMessaging));
-        topImage1 = (ImageView)findViewById(R.id.icon_image1);
-        topImage2 = (ImageView)findViewById(R.id.icon_image2);
-        bottomPages = (ViewGroup)findViewById(R.id.bottom_pages);
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
+
+        FrameLayout frameLayout = new FrameLayout(this);
+        frameLayout.setBackgroundColor(ApplicationLoader.getConfig().getDefaultTheme().getBackgroundColor());
+        scrollView.addView(frameLayout, LayoutHelper.createScroll(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.LEFT | Gravity.TOP));
+
+        FrameLayout frameLayout2 = new FrameLayout(this);
+        frameLayout.addView(frameLayout2, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.LEFT | Gravity.TOP, 0, 88, 0, 0));
+
+        topImage1 = new ImageView(this);
+        topImage1.setImageDrawable(icons[0]);
+        frameLayout2.addView(topImage1, LayoutHelper.createFrame(120, 120, Gravity.CENTER));
+
+        topImage2 = new ImageView(this);
         topImage2.setVisibility(View.GONE);
+        frameLayout2.addView(topImage2, LayoutHelper.createFrame(120, 120, Gravity.CENTER));
+
+        viewPager = new ViewPager(this);
         viewPager.setAdapter(new IntroAdapter());
         viewPager.setPageMargin(0);
         viewPager.setOffscreenPageLimit(1);
-        viewPager.setOnPageChangeListener(new ViewPager.OnPageChangeListener() {
+        frameLayout.addView(viewPager, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
+        viewPager.addOnPageChangeListener(new ViewPager.OnPageChangeListener() {
             @Override
             public void onPageScrolled(int position, float positionOffset, int positionOffsetPixels) {
-
+                bottomPages.setPageOffset(position, positionOffset);
             }
 
             @Override
@@ -151,10 +276,9 @@ public class IntroActivity extends Activity {
                         }
 
                         fadeinImage.bringToFront();
-                        fadeinImage.setImageResource(icons[lastPage]);
+                        fadeinImage.setImageDrawable(icons[lastPage]);
                         fadeinImage.clearAnimation();
                         fadeoutImage.clearAnimation();
-
 
                         Animation outAnimation = AnimationUtils.loadAnimation(IntroActivity.this, R.anim.icon_anim_fade_out);
                         outAnimation.setAnimationListener(new Animation.AnimationListener() {
@@ -198,6 +322,20 @@ public class IntroActivity extends Activity {
             }
         });
 
+        Button startMessagingButton = new Button(this);
+        startMessagingButton.setText(LocaleController.getString("StartMessaging", R.string.StartMessaging).toUpperCase());
+        startMessagingButton.setPadding(AndroidUtilities.dp(20), AndroidUtilities.dp(10), AndroidUtilities.dp(20), AndroidUtilities.dp(10));
+        startMessagingButton.setGravity(Gravity.CENTER);
+        startMessagingButton.setTextColor(0xffffffff);
+        startMessagingButton.setBackgroundColor(ApplicationLoader.getConfig().getDefaultTheme().getActionColor());
+        startMessagingButton.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16);
+        if (Build.VERSION.SDK_INT >= 21) {
+            StateListAnimator animator = new StateListAnimator();
+            animator.addState(new int[]{android.R.attr.state_pressed}, ObjectAnimator.ofFloat(startMessagingButton, "translationZ", AndroidUtilities.dp(2), AndroidUtilities.dp(4)).setDuration(200));
+            animator.addState(new int[]{}, ObjectAnimator.ofFloat(startMessagingButton, "translationZ", AndroidUtilities.dp(4), AndroidUtilities.dp(2)).setDuration(200));
+            startMessagingButton.setStateListAnimator(animator);
+        }
+        frameLayout.addView(startMessagingButton, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL | Gravity.BOTTOM, 10, 0, 10, 76));
         startMessagingButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
@@ -211,13 +349,69 @@ public class IntroActivity extends Activity {
                 finish();
             }
         });
+        if (BuildVars.DEBUG_VERSION) {
+            startMessagingButton.setOnLongClickListener(new View.OnLongClickListener() {
+                @Override
+                public boolean onLongClick(View v) {
+                    ConnectionsManager.getInstance().switchBackend();
+                    return true;
+                }
+            });
+        }
 
+        bottomPages = new BottomPagesView(this);
+        frameLayout.addView(bottomPages, LayoutHelper.createFrame(icons.length * 11, 5, Gravity.TOP | Gravity.CENTER_HORIZONTAL, 0, 350, 0, 0));
+
+        textView = new TextView(this);
+        textView.setTextColor(ApplicationLoader.getConfig().getDefaultTheme().getActionColor());
+        textView.setGravity(Gravity.CENTER);
+        textView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16);
+        frameLayout.addView(textView, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, 30, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL, 0, 0, 0, 20));
+        textView.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (startPressed || localeInfo == null) {
+                    return;
+                }
+                LocaleController.getInstance().applyLanguage(localeInfo, true, false);
+                startPressed = true;
+                Intent intent2 = new Intent(IntroActivity.this, LaunchActivity.class);
+                intent2.putExtra("fromIntro", true);
+                startActivity(intent2);
+                finish();
+            }
+        });
+
+        if (AndroidUtilities.isTablet()) {
+            FrameLayout frameLayout3 = new FrameLayout(this);
+            setContentView(frameLayout3);
+
+            View imageView = new ImageView(this);
+            BitmapDrawable drawable = (BitmapDrawable) getResources().getDrawable(R.drawable.catstile);
+            drawable.setTileModeXY(Shader.TileMode.REPEAT, Shader.TileMode.REPEAT);
+            imageView.setBackgroundDrawable(drawable);
+            frameLayout3.addView(imageView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
+
+            FrameLayout frameLayout4 = new FrameLayout(this);
+            frameLayout4.setBackgroundResource(R.drawable.btnshadow);
+            frameLayout4.addView(scrollView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
+            frameLayout3.addView(frameLayout4, LayoutHelper.createFrame(498, 528, Gravity.CENTER));
+        } else {
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+            setContentView(scrollView);
+        }
+
+        checkContinueText();
         justCreated = true;
+        NotificationCenter.getInstance().addObserver(this, NotificationCenter.suggestedLangpack);
+
+        AndroidUtilities.handleProxyIntent(this, getIntent());
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        AppsgeyserSDK.onResume(this);
         if (justCreated) {
             if (LocaleController.isRTL) {
                 viewPager.setCurrentItem(6);
@@ -228,27 +422,114 @@ public class IntroActivity extends Activity {
             }
             justCreated = false;
         }
-        Utilities.checkForCrashes(this);
-        Utilities.checkForUpdates(this);
+        AndroidUtilities.checkForCrashes(this);
+        AndroidUtilities.checkForUpdates(this);
+        ConnectionsManager.getInstance().setAppPaused(false, false);
+    }
+
+    @Override
+    protected void onPause() {
+        AppsgeyserSDK.onPause(this);
+        super.onPause();
+        AndroidUtilities.unregisterUpdates();
+        ConnectionsManager.getInstance().setAppPaused(true, false);
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        NotificationCenter.getInstance().removeObserver(this, NotificationCenter.suggestedLangpack);
+    }
+
+    private void checkContinueText() {
+        LocaleController.LocaleInfo englishInfo = null;
+        LocaleController.LocaleInfo systemInfo = null;
+        LocaleController.LocaleInfo currentLocaleInfo = LocaleController.getInstance().getCurrentLocaleInfo();
+        String systemLang = LocaleController.getSystemLocaleStringIso639().toLowerCase();
+        String arg = systemLang.contains("-") ? systemLang.split("-")[0] : systemLang;
+        SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
+        preferences.edit().putString("language_showed2", LocaleController.getSystemLocaleStringIso639().toLowerCase()).commit();
+        for (int a = 0; a < LocaleController.getInstance().languages.size(); a++) {
+            LocaleController.LocaleInfo info = LocaleController.getInstance().languages.get(a);
+            if (info.shortName.equals("en")) {
+                englishInfo = info;
+            }
+            if (info.shortName.replace("_", "-").equals(systemLang) || info.shortName.equals(arg)) {
+                systemInfo = info;
+            }
+            if (englishInfo != null && systemInfo != null) {
+                break;
+            }
+        }
+        if (englishInfo == null || systemInfo == null || englishInfo == systemInfo) {
+            return;
+        }
+        TLRPC.TL_langpack_getStrings req = new TLRPC.TL_langpack_getStrings();
+        if (systemInfo != currentLocaleInfo) {
+            req.lang_code = systemInfo.shortName.replace("_", "-");
+            localeInfo = systemInfo;
+        } else {
+            req.lang_code = englishInfo.shortName.replace("_", "-");
+            localeInfo = englishInfo;
+        }
+        req.keys.add("ContinueOnThisLanguage");
+        ConnectionsManager.getInstance().sendRequest(req, new RequestDelegate() {
+            @Override
+            public void run(TLObject response, TLRPC.TL_error error) {
+                if (response != null) {
+                    TLRPC.Vector vector = (TLRPC.Vector) response;
+                    if (vector.objects.isEmpty()) {
+                        return;
+                    }
+                    final TLRPC.LangPackString string = (TLRPC.LangPackString) vector.objects.get(0);
+                    if (string instanceof TLRPC.TL_langPackString) {
+                        AndroidUtilities.runOnUIThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                textView.setText(string.value);
+                            }
+                        });
+                    }
+                }
+            }
+        }, ConnectionsManager.RequestFlagWithoutLogin);
+    }
+
+    @Override
+    public void didReceivedNotification(int id, Object... args) {
+        if (id == NotificationCenter.suggestedLangpack) {
+            checkContinueText();
+        }
     }
 
     private class IntroAdapter extends PagerAdapter {
         @Override
         public int getCount() {
-            return 7;
+            return icons.length;
         }
 
         @Override
         public Object instantiateItem(ViewGroup container, int position) {
-            View view = View.inflate(container.getContext(), R.layout.intro_view_layout, null);
-            TextView headerTextView = (TextView)view.findViewById(R.id.header_text);
-            TextView messageTextView = (TextView)view.findViewById(R.id.message_text);
-            container.addView(view, 0);
+            FrameLayout frameLayout = new FrameLayout(container.getContext());
 
-            headerTextView.setText(getString(titles[position]));
-            messageTextView.setText(Html.fromHtml(getString(messages[position])));
+            TextView headerTextView = new TextView(container.getContext());
+            headerTextView.setTextColor(ApplicationLoader.getConfig().getDefaultTheme().getTextColor());
+            headerTextView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 26);
+            headerTextView.setGravity(Gravity.CENTER);
+            frameLayout.addView(headerTextView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.TOP | Gravity.LEFT, 18, 244, 18, 0));
 
-            return view;
+            TextView messageTextView = new TextView(container.getContext());
+            messageTextView.setTextColor(0xff808080);
+            messageTextView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15);
+            messageTextView.setGravity(Gravity.CENTER);
+            frameLayout.addView(messageTextView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.TOP | Gravity.LEFT, 16, 286, 16, 0));
+
+            container.addView(frameLayout, 0);
+
+            headerTextView.setText(titles[position]);
+            messageTextView.setText(messages[position]);
+
+            return frameLayout;
         }
 
         @Override
@@ -259,24 +540,12 @@ public class IntroActivity extends Activity {
         @Override
         public void setPrimaryItem(ViewGroup container, int position, Object object) {
             super.setPrimaryItem(container, position, object);
-            int count = bottomPages.getChildCount();
-            for (int a = 0; a < count; a++) {
-                View child = bottomPages.getChildAt(a);
-                if (a == position) {
-                    child.setBackgroundColor(0xff2ca5e0);
-                } else {
-                    child.setBackgroundColor(0xffbbbbbb);
-                }
-            }
+            bottomPages.setCurrentPage(position);
         }
 
         @Override
         public boolean isViewFromObject(View view, Object object) {
             return view.equals(object);
-        }
-
-        @Override
-        public void finishUpdate(View arg0) {
         }
 
         @Override
@@ -286,10 +555,6 @@ public class IntroActivity extends Activity {
         @Override
         public Parcelable saveState() {
             return null;
-        }
-
-        @Override
-        public void startUpdate(View arg0) {
         }
 
         @Override
